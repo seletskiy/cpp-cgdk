@@ -205,6 +205,28 @@ pair< float, Point> get_explore_point(const World& world) {
     return maximum;
 }
 
+void simple_move(const Point& pivot, const Point& point, Move& move) {
+    move.setAction(MOVE);
+    //  N
+    // W E
+    //  S
+    if (pivot.x + 1 == point.x) {
+        move.setDirection(EAST);
+    }
+
+    if (pivot.x - 1 == point.x) {
+        move.setDirection(WEST);
+    }
+
+    if (pivot.y + 1 == point.y) {
+        move.setDirection(NORTH);
+    }
+
+    if (pivot.y - 1 == point.y) {
+        move.setDirection(SOUTH);
+    }
+}
+
 bool astar(const World& world,
         const Point start, const Point goal,
         const set< Point >& obstacles,
