@@ -35,7 +35,7 @@ import ycm_core
 # compilation database set (by default, one is not set).
 # CHANGE THIS LIST OF FLAGS. YES, THIS IS THE DROID YOU HAVE BEEN LOOKING FOR.
 flags = [
-'-static',
+'-std=c++11',
 '-fno-optimize-sibling-calls',
 '-fno-strict-aliasing',
 '-DONLINE_JUDGE',

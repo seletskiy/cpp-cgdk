@@ -12,11 +12,46 @@
 #include <list>
 #include <algorithm>
 #include <stack>
+#include <memory>
 
 using namespace model;
 using namespace std;
 
 const int MAX_SHOOTING_RANGE = 10;
+
+struct Point;
+struct Mission;
+
+typedef vector<vector<float>> WeightMap;
+typedef list<Point> Path;
+typedef vector<Trooper> Troopers;
+
+WeightMap empty_map;
+WeightMap safety_map;
+WeightMap explore_map;
+set<Point> obstacles;
+map<TrooperType, stack<unique_ptr<Mission>>> missions;
+map<TrooperType, Path> paths;
+
+void fill_empty_map(const World&, WeightMap& target);
+void init_safety_map(const World&);
+void init_explore_map(const World&);
+
+void update_explore_map(const World&);
+
+pair<float, Point> get_explore_point(const World&);
+
+bool astar(const World&, const Point&, const Point&,
+        const set<Point>&, const WeightMap&, Path&);
+
+void simple_move(const Point&, const Point&, Move&);
+
+void validate_missions();
+bool is_mission_active(const Trooper&);
+void assign_mission(const Trooper&, unique_ptr<Mission>);
+void evaluate_mission(const World&, const Trooper&, Move& move);
+
+void draw_map(const World&, const WeightMap&, const Troopers&, const Trooper&);
 
 struct Point {
     int x;
@@ -42,42 +77,29 @@ struct Point {
 };
 
 struct Mission {
-    enum Type {
-        NONE = 0,
-        EXPLORE = 1
-    };
+    Mission() {}
 
-    Mission(): type(NONE) {}
-
-    Type type;
     Point target;
 
     bool canceled;
+
+    virtual void eval(const World&, const Trooper&, Move&) = 0;
 };
 
-typedef vector< vector< float > > WeightMap;
-typedef list< Point > Path;
-typedef vector< Trooper > Troopers;
+struct MissionExplore: Mission {
+    MissionExplore() {}
 
-WeightMap empty_map;
-WeightMap safety_map;
-WeightMap explore_map;
-set< Point > obstacles;
-map< TrooperType, stack< Mission > > missions;
+    void eval(const World& world, const Trooper& self, Move& move) {
+        auto start = Point(self.getX(), self.getY());
+        Path path;
+        astar(world, start, target, obstacles, empty_map, path);
+        printf("[MISSION] Explore: %d, %d\n", target.x, target.y);
+        simple_move(Point(self.getX(), self.getY()), path.front(), move);
+        paths[self.getType()] = path;
+    }
+};
 
 MyStrategy::MyStrategy() {}
-
-void fill_empty_map(const World&, WeightMap& target);
-void init_safety_map(const World&);
-void init_explore_map(const World&);
-void update_explore_map(const World&);
-pair< float, Point > get_explore_point(const World&);
-bool astar(const World&, const Point, const Point,
-        const set< Point >&, const WeightMap&, Path&);
-void simple_move(const Point&, const Point&, Move&);
-void validate_missions();
-bool is_mission_active(const Trooper&);
-void draw_map(const World&, const WeightMap&, const Troopers&, const Trooper&, const Path&);
 
 void MyStrategy::move(const Trooper& self, const World& world,
         const Game& game, Move& move) {
@@ -107,70 +129,85 @@ void MyStrategy::move(const Trooper& self, const World& world,
 
     validate_missions();
 
-    Path path;
-    Mission mission;
-
     if (!is_mission_active(self)) {
         Point interest = get_explore_point(world).second;
-        mission.type = Mission::EXPLORE;
-        mission.target = interest;
-        missions[self.getType()].push(mission);
+        auto mission = unique_ptr<Mission>(new MissionExplore);
+        mission->target = interest;
+        assign_mission(self, std::move(mission));
     }
 
-    mission = missions.at(self.getType()).top();
-    astar(world, Point(self.getX(), self.getY()), mission.target, obstacles,
-        empty_map, path);
-    printf("MISSION %d: %d, %d\n", mission.type,
-        mission.target.x, mission.target.y);
-    //printf("Self %d %d; Point %d %d\n", self.getX(), self.getY(),
-    //    path.front().x, path.front().y);
-    simple_move(Point(self.getX(), self.getY()), path.front(), move);
+    evaluate_mission(world, self, move);
 
-    draw_map(world, safety_map, world.getTroopers(), self, path);
+    draw_map(world, safety_map, world.getTroopers(), self);
+}
+
+void assign_mission(const Trooper& self, unique_ptr<Mission> mission) {
+    missions[self.getType()].push(std::move(mission));
+}
+
+void evaluate_mission(const World& world, const Trooper& self, Move& move) {
+    missions.at(self.getType()).top()->eval(world, self, move);
+}
+
+bool overlay_troopers(const Point& point, const Troopers& troopers) {
+    for (auto it = troopers.begin(); it != troopers.end(); it++) {
+        auto& trooper = *it;
+
+        if (trooper.getX() == point.x && trooper.getY() == point.y) {
+            printf("\e[1;37m");
+            printf("@");
+            return true;
+        }
+    }
+
+    for (auto it = troopers.begin(); it != troopers.end(); it++) {
+        auto& trooper = *it;
+
+        if (paths.count(trooper.getType()) > 0){
+            auto& path = paths[trooper.getType()];
+            auto it = find(path.begin(), path.end(), point);
+            if (it != path.end()) {
+                printf("\e[37m");
+                printf("x");
+                return true;
+            }
+        }
+    }
+
+    return false;
 }
 
 void draw_map(const World& world, const WeightMap& map_data,
-        const Troopers& troopers, const Trooper& self, const Path& path) {
+        const Troopers& troopers, const Trooper& self) {
+    printf("\e[34m");
+    printf("%4s", " ");
     for (int x = 0; x < world.getWidth(); x++) {
         printf("%3d ", x);
     }
     printf("\n");
+    printf("%4s", "   +");
+    for (int x = 0; x < world.getWidth(); x++) {
+        printf("----");
+    }
+    printf("\n");
     for (int y = 0; y < world.getHeight(); y++) {
-        //printf("%4d", y);
+        printf("\e[0;34m");
+        printf("%3d|", y);
         for (int x = 0; x < world.getWidth(); x++) {
+            printf("\e[0m");
+            auto point = Point(x, y);
+
             if (world.getCells().at(x).at(y) != FREE) {
-                printf("TTT ");
+                printf("████");
             } else {
                 printf("%3.0f", map_data.at(x).at(y));
 
-                {
-                    Path::const_iterator it = find(
-                        path.begin(), path.end(),
-                        Point(x, y));
-                    if (it != path.end()) {
-                        printf("X");
-                        continue;
-                    }
+                bool printed = false;
+                printed = printed || overlay_troopers(point, troopers);
+
+                if (!printed) {
+                    printf(" ");
                 }
-
-                {
-                    bool print = false;
-                    for (Troopers::const_iterator it = troopers.begin();
-                            it != troopers.end(); it++) {
-                        const Trooper& trooper = *it;
-
-                        if (trooper.getX() == x && trooper.getY() == y) {
-                            print = true;
-                        }
-                    }
-
-                    if (print) {
-                        printf("S");
-                        continue;
-                    }
-                }
-
-                printf(" ");
             }
         }
         printf("\n");
@@ -191,10 +228,9 @@ bool is_mission_active(const Trooper& self) {
 }
 
 void validate_missions() {
-    for (map< TrooperType, stack< Mission > >::iterator it = missions.begin();
-            it != missions.end(); it++) {
-        stack< Mission > missions_stack = it->second;
-        while (!missions_stack.empty() && missions_stack.top().canceled) {
+    for (auto it = missions.begin(); it != missions.end(); it++) {
+        auto& missions_stack = it->second;
+        while (!missions_stack.empty() && missions_stack.top()->canceled) {
             missions_stack.pop();
         }
     }
@@ -212,7 +248,7 @@ float euclid(const Point& start, const Point& end) {
     return euclid(start.x, start.y, end.x, end.y);
 }
 
-void neighbors(const Point pivot, const World& world, list< Point >& result) {
+void neighbors(const Point pivot, const World& world, list<Point>& result) {
     if (pivot.x > 0) {
         result.push_back(Point(pivot.x - 1, pivot.y));
     }
@@ -234,7 +270,7 @@ void init_safety_map(const World& world) {
     clock_t start_clock = clock();
     safety_map.reserve(world.getWidth());
     for (int x = 0; x < world.getWidth(); x++) {
-        safety_map.push_back(vector< float >());
+        safety_map.push_back(vector<float>());
         safety_map.at(x).reserve(world.getHeight());
         for (int y = 0; y < world.getHeight(); y++) {
             safety_map.at(x).push_back(0);
@@ -269,7 +305,7 @@ void init_safety_map(const World& world) {
 void fill_empty_map(const World& world, WeightMap& target) {
     target.reserve(world.getWidth());
     for (int x = 0; x < world.getWidth(); x++) {
-        target.push_back(vector< float >());
+        target.push_back(vector<float>());
         target.at(x).reserve(world.getHeight());
         for (int y = 0; y < world.getHeight(); y++) {
             target.at(x).push_back(0);
@@ -281,7 +317,7 @@ void fill_empty_map(const World& world, WeightMap& target) {
 void update_explore_map(const World& world) {
     for (int x = 0; x < world.getWidth(); x++) {
         for (int y = 0; y < world.getHeight(); y++) {
-            for (vector< Trooper >::const_iterator it = world.getTroopers().begin();
+            for (vector<Trooper>::const_iterator it = world.getTroopers().begin();
                     it != world.getTroopers().end(); ++it) {
                 Trooper trooper = *it;
                 if (world.isVisible(
@@ -299,7 +335,7 @@ void update_explore_map(const World& world) {
 }
 
 pair< float, Point> get_explore_point(const World& world) {
-    pair< float, Point > maximum = make_pair(0, Point(0, 0));
+    pair<float, Point> maximum = make_pair(0, Point(0, 0));
 
     for (int x = 0; x < world.getWidth(); x++) {
         for (int y = 0; y < world.getHeight(); y++) {
@@ -340,21 +376,21 @@ void simple_move(const Point& pivot, const Point& point, Move& move) {
 }
 
 bool astar(const World& world,
-        const Point start, const Point goal,
-        const set< Point >& obstacles,
+        const Point& start, const Point& goal,
+        const set<Point>& obstacles,
         const WeightMap& costs,
-        list< Point >& path) {
+        Path& path) {
 
-    set< Point > closed_set;
-    priority_queue< pair< float, Point > > open_queue;
-    set< Point > open_set;
-    std::map< Point, Point > came_from;
+    set<Point> closed_set;
+    priority_queue<pair<float, Point>> open_queue;
+    set<Point> open_set;
+    std::map<Point, Point> came_from;
 
     open_set.insert(start);
     open_queue.push(make_pair(0, start));
 
-    std::map< Point, float > g_score;
-    std::map< Point, float > f_score;
+    std::map<Point, float> g_score;
+    std::map<Point, float> f_score;
     g_score.insert(make_pair(start, 0));
     f_score.insert(make_pair(start, -manhatten(start, goal)));
 
@@ -374,10 +410,10 @@ bool astar(const World& world,
         open_queue.pop();
         closed_set.insert(current);
 
-        list< Point > neighbors_list;
+        list<Point> neighbors_list;
         neighbors(current, world, neighbors_list);
 
-        for (list< Point >::iterator it = neighbors_list.begin();
+        for (list<Point>::iterator it = neighbors_list.begin();
                 it != neighbors_list.end(); ++it) {
             Point neighbor = *it;
 
