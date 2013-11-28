@@ -46,6 +46,7 @@ void update_explore_map(const World&);
 pair< float, Point > get_explore_point(const World&);
 bool astar(const World&, const Point, const Point,
         const set< Point >&, list< Point >&);
+void simple_move(const Point&, const Point&, Move&);
 
 void MyStrategy::move(const Trooper& self, const World& world,
         const Game& game, Move& move) {
@@ -72,6 +73,8 @@ void MyStrategy::move(const Trooper& self, const World& world,
     Point interest = get_explore_point(world).second;
     list< Point > path;
     astar(world, interest, Point(self.getX(), self.getY()), obstacles, path);
+
+    simple_move(Point(self.getX(), self.getY()), path.front(), move);
 
     printf("\n");
     for (int x = 0; x < world.getWidth(); x++) {
